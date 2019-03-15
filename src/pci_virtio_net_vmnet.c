@@ -229,19 +229,16 @@ static int
 vmn_create(struct pci_vtnet_softc *sc)
 {
 	xpc_object_t interface_desc;
-	uuid_t uuid;
-	__block interface_ref iface;
-	__block vmnet_return_t iface_status;
-	dispatch_semaphore_t iface_created;
-	dispatch_queue_t if_create_q;
-	dispatch_queue_t if_q;
+	__block interface_ref iface = NULL;
+	__block vmnet_return_t iface_status = 0;
 	struct vmnet_state *vms;
 	uint32_t uuid_status;
 
 	interface_desc = xpc_dictionary_create(NULL, NULL, 0);
-	xpc_dictionary_set_uint64(interface_desc, vmnet_operation_mode_key,
-		VMNET_SHARED_MODE);
 
+	xpc_dictionary_set_uint64(interface_desc, vmnet_operation_mode_key, VMNET_SHARED_MODE);
+
+	uuid_t uuid;
 	if (guest_uuid_str != NULL) {
 		uuid_from_string(guest_uuid_str, &uuid, &uuid_status);
 		if (uuid_status != uuid_s_ok) {
@@ -250,24 +247,18 @@ vmn_create(struct pci_vtnet_softc *sc)
 	} else {
 		uuid_generate_random(uuid);
 	}
-
 	xpc_dictionary_set_uuid(interface_desc, vmnet_interface_id_key, uuid);
-	iface = NULL;
-	iface_status = 0;
-
+  
 	vms = malloc(sizeof(struct vmnet_state));
-
 	if (!vms) {
 		return (-1);
 	}
 
-	if_create_q = dispatch_queue_create("org.xhyve.vmnet.create",
-		DISPATCH_QUEUE_SERIAL);
-
-	iface_created = dispatch_semaphore_create(0);
-
-	iface = vmnet_start_interface(interface_desc, if_create_q,
-		^(vmnet_return_t status, xpc_object_t interface_param)
+	dispatch_queue_t if_create_q = dispatch_queue_create("org.xhyve.vmnet.create", DISPATCH_QUEUE_SERIAL);
+	dispatch_semaphore_t iface_created = dispatch_semaphore_create(0);
+	iface = vmnet_start_interface(interface_desc,
+				      if_create_q,
+				      ^(vmnet_return_t status, xpc_object_t interface_param)
 	{
 		iface_status = status;
 		if (status != VMNET_SUCCESS || !interface_param) {
@@ -275,11 +266,10 @@ vmn_create(struct pci_vtnet_softc *sc)
 			return;
 		}
 
-		if (sscanf(xpc_dictionary_get_string(interface_param,
-			vmnet_mac_address_key),
-			"%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-			&vms->mac[0], &vms->mac[1], &vms->mac[2], &vms->mac[3],
-			&vms->mac[4], &vms->mac[5]) != 6)
+		if (sscanf(xpc_dictionary_get_string(interface_param, vmnet_mac_address_key),
+			   "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+			   &vms->mac[0], &vms->mac[1], &vms->mac[2], &vms->mac[3],
+			   &vms->mac[4], &vms->mac[5]) != 6)
 		{
 			assert(0);
 		}
@@ -287,17 +277,15 @@ vmn_create(struct pci_vtnet_softc *sc)
 		vms->mtu = (unsigned)
 			xpc_dictionary_get_uint64(interface_param, vmnet_mtu_key);
 		vms->max_packet_size = (unsigned)
-			xpc_dictionary_get_uint64(interface_param,
-				vmnet_max_packet_size_key);
+			xpc_dictionary_get_uint64(interface_param, vmnet_max_packet_size_key);
+
 		dispatch_semaphore_signal(iface_created);
 	});
-
 	dispatch_semaphore_wait(iface_created, DISPATCH_TIME_FOREVER);
 	dispatch_release(if_create_q);
 
 	if (iface == NULL || iface_status != VMNET_SUCCESS) {
-		fprintf(stderr, "virtio_net: Could not create vmnet interface, "
-			"permission denied or no entitlement?\n");
+		fprintf(stderr, "virtio_net: Could not create vmnet interface, permission denied or no entitlement?\n");
 		free(vms);
 		return (-1);
 	}
@@ -305,10 +293,11 @@ vmn_create(struct pci_vtnet_softc *sc)
 	vms->iface = iface;
 	sc->vms = vms;
 
-	if_q = dispatch_queue_create("org.xhyve.vmnet.iface_q", 0);
-
-	vmnet_interface_set_event_callback(iface, VMNET_INTERFACE_PACKETS_AVAILABLE,
-		if_q, ^(UNUSED interface_event_t event_id, UNUSED xpc_object_t event)
+	dispatch_queue_t if_q = dispatch_queue_create("org.xhyve.vmnet.iface_q", 0);
+	vmnet_interface_set_event_callback(iface,
+                                     VMNET_INTERFACE_PACKETS_AVAILABLE,
+                                     if_q,
+                                     ^(UNUSED interface_event_t event_id, UNUSED xpc_object_t event)
 	{
 		pci_vtnet_tap_callback(sc);
 	});
